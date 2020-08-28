@@ -1,123 +1,79 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
+	"context"
 	"log"
-	"net/http"
+	"net"
 
-	"github.com/gorilla/mux"
+	pb "github.com/RaminCH/go3_grpc/task2/server/proto/consignment"
+	"google.golang.org/grpc"
+	_ "google.golang.org/grpc/reflection"
 )
 
-type Item struct {
-	ID      string `json:"id"`
-	Content string `json:"content"`
+const (
+	port = ":50051"
+)
+
+type repository interface {
+	Solve(*pb.Solution) (*pb.Solution, error)
+	GetAll() []*pb.Solution
 }
 
-//Items ...
-var Items []Item = []Item{
-	Item{"1", "abcd"},
+//Repository ... Наша база данных
+type Repository struct {
+	solutions []*pb.Solution
 }
 
-//ErrorMessage ...
-type ErrorMessage struct {
-	Message string `json:"Message"`
+//Solve ....
+func (r *Repository) Solve(solution *pb.Solution) (*pb.Solution, error) {
+	updatedSolution := append(r.solutions, solution)
+	r.solutions = updatedSolution
+	return solution, nil
 }
 
-//GetItems ...
-func GetItems(w http.ResponseWriter, r *http.Request) {
-	find := false
-		if !find {
-			w.WriteHeader(http.StatusNotFound) 
-			var erM = ErrorMessage{Message: "Error No one items in stock!"}
-			json.NewEncoder(w).Encode(erM)
-		} else {
-			json.NewEncoder(w).Encode(Items)
-		}
+//GetAll ...
+func (r *Repository) GetAll() []*pb.Solution {
+	return r.solutions
 }
 
-//GetItemID ...
-func GetItemID(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	find := false
-	for _, item := range Items {
-		if item.ID == id {
-			find = true
-			json.NewEncoder(w).Encode(item)
-		}
+type service struct {
+	repo repository
+}
+
+func (s *service) Solve(ctx context.Context, req *pb.) (*pb.Response, error) {
+	command, err := s.repo.Solve(req)
+	if err != nil {
+		return nil, err
 	}
-	if !find {
-		w.WriteHeader(http.StatusNotFound) // Изменить статус код запроса на 404
-		var erM = ErrorMessage{Message: "Error: Item with that id not found!"}
-		json.NewEncoder(w).Encode(erM)
-	}
+	log.Printf("The equation has %v roots", solution)
+	return &pb.Response{Solve: true, Solution: solution}, nil
 }
 
-//PostItem ...
-func PostItem(w http.ResponseWriter, r *http.Request) {
-	reqBody, _ := ioutil.ReadAll(r.Body)
-	var item Item
-	json.Unmarshal(reqBody, &item)
-	w.WriteHeader(http.StatusCreated)
-	Items = append(Items, item)
-}
-
-//PutItemID ...
-func PutItemID(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-
-	find := false
-
-	for index, item := range Items {
-		if item.ID == id {
-			find = true
-			reqBody, _ := ioutil.ReadAll(r.Body)
-			w.WriteHeader(http.StatusAccepted)    
-			json.Unmarshal(reqBody, &Items[index])
-		}
-	}
-
-	if !find {
-		w.WriteHeader(http.StatusNotFound) // Изменить статус код запроса на 404
-		var erM = ErrorMessage{Message: "Error: Item with that id not found!"}
-		json.NewEncoder(w).Encode(erM)
-	}
-
-}
-
-//DeleteItemID ...
-func DeleteItemID(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-
-	find := false
-
-	for index, item := range Items {
-		if item.ID == id {
-			find = true
-			w.WriteHeader(http.StatusAccepted) 
-			Items = append(Items[:index], Items[index+1:]...)
-		}
-	}
-	if !find {
-		w.WriteHeader(http.StatusNotFound) // Изменить статус код запроса на 404
-		var erM = ErrorMessage{Message: "Error: Item with that id not found!"}
-		json.NewEncoder(w).Encode(erM)
-	}
-
+//GetAllCommands ...
+func (s *service) GetAll(ctx context.Context, req *pb.GetRequest) (*pb.Response, error) {
+	solutions := s.repo.GetAll()
+	return &pb.Response{Solutions: solutions}, nil
 }
 
 func main() {
-	
-	router := mux.NewRouter().StrictSlash(true)
+	repo := &Repository{}
 
-	router.HandleFunc("/items", GetItems).Methods("GET")
-	router.HandleFunc("/item/{id}", GetItemID).Methods("GET")
+	//Настройка gRPC сервера
+	listener, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("failed to listen port: %v", err)
+	}
 
-	router.HandleFunc("/item", PostItem).Methods("POST")
+	server := grpc.NewServer()
 
-	router.HandleFunc("/item/{id}", PutItemID).Methods("PUT")
+	//Регистрируем наш сервис для сервера
+	ourService := &service{repo}
+	pb.RegisterSolverServer(server, ourService)
+	//Чтобы выходные параметры сервера сохранялись в go-runtime
+	reflection.Register(server)
 
-	router.HandleFunc("/item/{id}", DeleteItemID).Methods("DELETE")
-
-	log.Fatal(http.ListenAndServe(":8000", router))
+	log.Println("gRPC server running on port:", port)
+	if err := server.Serve(listener); err != nil {
+		log.Fatalf("failed to server from port: %v", err)
+	}
 }
